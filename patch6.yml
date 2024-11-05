@@ -1,0 +1,93 @@
+---
+- name: "Apply patches to Amazon Linux servers and update kernel to latest"
+  hosts: all
+  become: yes
+  become_method: sudo
+  become_user: root
+  vars:
+    ansible_become_password: "root"  # Recommended to use Ansible Vault for this
+  serial: 2
+  tasks:
+    - name: "Ensure httpd is installed"
+      dnf:
+        name: httpd
+        state: present
+      register: httpd_installed
+
+    - name: "Check if application process is running"
+      shell: "pgrep -x httpd && echo 'process is running' || echo 'Process is not running.'"
+      register: application_process_check
+      changed_when: false
+
+    - name: "Stop play if application is running"
+      fail:
+        msg: "{{ inventory_hostname }} has a running application. Please stop the application and then proceed with patching."
+      when: application_process_check.stdout == "process is running"
+
+    - name: "Get current kernel version"
+      shell: "uname -r"
+      register: current_kernel_version
+      changed_when: false
+
+    - name: "Print current kernel version"
+      debug:
+        msg: "Current kernel version: {{ current_kernel_version.stdout }}"
+
+    - name: "Apply patches to the server and update kernel"
+      dnf:
+        name: kernel
+        state: latest
+      when:
+        - application_process_check.stdout == "Process is not running."
+        - ansible_distribution in ["CentOS", "RedHat", "Amazon"]
+      register: patch_update
+
+    - name: "Get the latest installed kernel version"
+      shell: "rpm -q --last kernel | head -1 | awk '{print $1}' | sed 's/kernel-//'"
+      register: latest_kernel_version
+      changed_when: false
+
+    - name: "Print latest installed kernel version"
+      debug:
+        msg: "Latest installed kernel version: {{ latest_kernel_version.stdout }}"
+
+    - name: "Set latest kernel as default using grubby"
+      shell: "sudo grubby --set-default=/boot/vmlinuz-{{ latest_kernel_version.stdout }}"
+      when: latest_kernel_version.stdout is defined
+      register: grubby_set_default
+      changed_when: true
+
+    - name: "Print grubby command result"
+      debug:
+        msg: "Grubby command output: {{ grubby_set_default.stdout }}"
+
+    - name: "Check if reboot is required"
+      shell: |
+        KERNEL_NEW=$(rpm -q --last kernel | head -1 | awk '{print $1}' | sed 's/kernel-//')
+        KERNEL_NOW=$(uname -r)
+        if [[ "$KERNEL_NEW" != "$KERNEL_NOW" ]]; then
+          echo "reboot needed"
+        else
+          echo "reboot not needed"
+        fi
+      register: reboot_status
+      ignore_errors: true
+
+    - name: "Print if reboot is required"
+      debug:
+        msg: "Reboot required status: {{ reboot_status.stdout }}"
+
+    - name: "Reboot the system if needed"
+      reboot:
+        msg: "Rebooting system after patching"
+        reboot_timeout: 300
+      when: reboot_status.stdout == "reboot needed"
+
+    - name: "Verify system uptime"
+      shell: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: "Print system uptime"
+      debug:
+        msg: "System uptime: {{ uptime_result.stdout }}"
