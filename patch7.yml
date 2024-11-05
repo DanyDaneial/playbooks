@@ -1,0 +1,71 @@
+---
+- name: "Apply patches to Amazon Linux servers and update kernel to specific version"
+  hosts: all
+  become: yes
+  become_method: sudo
+  become_user: root
+  vars:
+    ansible_become_password: "root"  # Recommended to use Ansible Vault for this
+    target_kernel_version: "6.1.112-122.189.amzn2023.x86_64"  # Hardcoded desired kernel version
+  serial: 2
+  tasks:
+    - name: "Ensure httpd is installed"
+      dnf:
+        name: httpd
+        state: present
+      register: httpd_installed
+
+    - name: "Check if application process is running"
+      shell: "pgrep -x httpd && echo 'process is running' || echo 'Process is not running.'"
+      register: application_process_check
+      changed_when: false
+
+    - name: "Stop play if application is running"
+      fail:
+        msg: "{{ inventory_hostname }} has a running application. Please stop the application and then proceed with patching."
+      when: application_process_check.stdout == "process is running"
+
+    - name: "Get current kernel version"
+      shell: "uname -r"
+      register: current_kernel_version
+      changed_when: false
+
+    - name: "Print current kernel version"
+      debug:
+        msg: "Current kernel version: {{ current_kernel_version.stdout }}"
+
+    - name: "Apply patches to the server and update kernel"
+      dnf:
+        name: "kernel-{{ target_kernel_version }}"
+        state: latest
+      when:
+        - application_process_check.stdout == "Process is not running."
+        - ansible_distribution in ["CentOS", "RedHat", "Amazon"]
+      register: patch_update
+
+    - name: "Set target kernel as default using grubby"
+      shell: "sudo grubby --set-default=/boot/vmlinuz-{{ target_kernel_version }}"
+      register: grubby_set_default
+      changed_when: true
+
+    - name: "Print grubby command result"
+      debug:
+        msg: "Grubby command output: {{ grubby_set_default.stdout }}"
+
+    - name: "Print kernel update confirmation"
+      debug:
+        msg: "Kernel has been updated to version {{ target_kernel_version }} and set as default."
+
+    - name: "Reboot the system to apply kernel update"
+      reboot:
+        msg: "Mandatory rebooting system after setting new kernel as default"
+        reboot_timeout: 300
+
+    - name: "Verify system uptime after reboot"
+      shell: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: "Print system uptime"
+      debug:
+        msg: "System uptime after reboot: {{ uptime_result.stdout }}"
