@@ -3,16 +3,6 @@
   hosts: all
   serial: 2
   tasks:
-    - name: "Check if application process is running"
-      shell: pgrep -x <application_name> && echo "process is running" || echo "Process is not running."
-      register: application_process_check
-      changed_when: false
-
-    - name: "Stop play if application is running"
-      fail: 
-        msg: "{{ inventory_hostname }} has a running application. Please stop the application and then proceed with patching."
-      when: application_process_check.stdout == "process is running"
-
     - name: "Apply patches to the server"
       yum:
         name: kernel
